@@ -2,16 +2,36 @@
   "name": "watcher",
   "displayName": "Watcher",
   "description": "AI-powered PR review agent using editor-provided models",
-  "version": "0.0.1",
-  "publisher": "local",
+  "version": "0.1.0",
+  "publisher": "mr-burhanuddin",
   "author": {
     "name": "Burhanuddin"
   },
+  "icon": "images/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mr-burhanuddin/WATCHER"
+  },
+  "license": "MIT",
   "engines": {
     "vscode": "^1.87.0"
   },
   "categories": [
+    "AI",
+    "Snippets",
     "Other"
+  ],
+  "keywords": [
+    "pull request",
+    "code review",
+    "ai",
+    "git",
+    "productivity",
+    "code reviewer",
+    "ai code reviewer",
+    "pr reviewer",
+    "reviewer",
+    "code analyser"
   ],
   "activationEvents": [
     "command:watcher.run"
