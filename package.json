@@ -1,0 +1,58 @@
+{
+  "name": "watcher",
+  "displayName": "Watcher",
+  "description": "AI-powered PR review agent using editor-provided models",
+  "version": "0.0.1",
+  "publisher": "local",
+  "author": {
+    "name": "Burhanuddin"
+  },
+  "engines": {
+    "vscode": "^1.87.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "command:watcher.run"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "watcher.run",
+        "title": "Watcher: Run PR Review"
+      }
+    ],
+    "configuration": {
+      "title": "Watcher",
+      "properties": {
+        "watcher.autoStage": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically stage Watcher-generated files (.watcher/) after review"
+        },
+        "watcher.baseBranch": {
+          "type": "string",
+          "default": "origin/dev",
+          "description": "Base branch to compare against for PR review (e.g. origin/main, origin/develop). If empty, repo config must provide it."
+        }
+      }
+    }
+  },
+  "capabilities": {
+    "languageModel": true
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.30",
+    "@types/vscode": "^1.108.1",
+    "typescript": "^5.4.0"
+  },
+  "dependencies": {
+    "yaml": "^2.8.2"
+  }
+}
