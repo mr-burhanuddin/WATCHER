@@ -1,0 +1,144 @@
+import { WatcherAIResult } from "./ai";
+
+function detectHallucinationRisk(text: string): {
+  risk: "LOW" | "MEDIUM" | "HIGH";
+  triggers: string[];
+} {
+  const triggers: string[] = [];
+  const patterns = [
+    "might be",
+    "possibly",
+    "appears to",
+    "likely",
+    "assumed",
+    "cannot verify",
+    "not sure",
+    "unclear",
+  ];
+
+  const lower = text.toLowerCase();
+
+  for (const p of patterns) {
+    if (lower.includes(p)) {
+      triggers.push(p);
+    }
+  }
+
+  if (triggers.length >= 4) {
+    return { risk: "HIGH", triggers };
+  }
+
+  if (triggers.length >= 2) {
+    return { risk: "MEDIUM", triggers };
+  }
+
+  return { risk: "LOW", triggers };
+}
+
+export function generateFullReport(ai: WatcherAIResult): string {
+  const hallucination = detectHallucinationRisk(
+    ai.summary + " " + ai.issues.join(" "),
+  );
+
+  return `
+# Watcher – Pull Request Review
+
+## 🤖 Confidence Assessment
+- Confidence Score: **${ai.confidence_score}/100**
+- Risk Level: **${hallucination.risk}**
+- Notes: ${
+    ai.confidence_notes.includes("Verification disagreement")
+      ? "⚠️ **AI self-verification detected disagreement. Manual review recommended.**"
+      : ai.confidence_notes.includes("Diff truncated")
+        ? "⚠️ **Large PR detected:** Review is partial due to diff size limits."
+        : ai.confidence_notes
+  }
+
+
+${
+  hallucination.risk !== "LOW"
+    ? `⚠️ **Caution:** This review contains speculative language (${hallucination.triggers.join(
+        ", ",
+      )}). Manual verification recommended.`
+    : ""
+}
+
+## AI Attribution
+- AI Generated: **${ai.ai_generated_percent}%**
+- Human Written: **${100 - ai.ai_generated_percent}%**
+
+## Code Issues
+${
+  ai.issues.length > 0
+    ? ai.issues.map((i) => `- ${i}`).join("\n")
+    : "- No major issues detected"
+}
+
+## Test Feedback
+${
+  ai.test_feedback.length > 0
+    ? ai.test_feedback.map((t) => `- ${t}`).join("\n")
+    : "- No test issues detected"
+}
+
+## PR Summary
+${ai.summary}
+
+## Custom Checklist Results
+${
+  ai.checklist_results && ai.checklist_results.length > 0
+    ? ai.checklist_results
+        .map((r) => `- **${r.id}**: ${r.status} — ${r.notes}`)
+        .join("\n")
+    : "- No checklist applied"
+}
+
+`;
+}
+
+export function generatePRSummaryBlock(ai: WatcherAIResult): string {
+  const hallucination = detectHallucinationRisk(
+    ai.summary + " " + ai.issues.join(" "),
+  );
+
+  return `
+## 🤖 Watcher PR Review
+
+**Confidence:** ${ai.confidence_score}/100  
+**Risk Level:** ${hallucination.risk}
+
+${
+  hallucination.risk !== "LOW"
+    ? "⚠️ **Manual review strongly recommended.**"
+    : "✅ **High confidence review.**"
+}
+
+### 🔍 Key Findings
+${
+  ai.issues.length > 0
+    ? ai.issues.map((i) => `- ${i}`).join("\n")
+    : "- No significant issues detected"
+}
+
+### 🧪 Test Feedback
+${
+  ai.test_feedback.length > 0
+    ? ai.test_feedback.map((t) => `- ${t}`).join("\n")
+    : "- No test issues detected"
+}
+
+### ✅ Checklist
+${
+  ai.checklist_results && ai.checklist_results.length > 0
+    ? ai.checklist_results.map((r) => `- ${r.id}: ${r.status}`).join("\n")
+    : "- No checklist applied"
+}
+
+<details>
+<summary>📄 Full Watcher Report</summary>
+
+See \`.watcher/WATCHER_REVIEW.md\`
+
+</details>
+`;
+}
