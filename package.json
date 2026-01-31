@@ -4,6 +4,9 @@
   "description": "AI-powered PR review agent using editor-provided models",
   "version": "0.0.1",
   "publisher": "local",
+  "author": {
+    "name": "Burhanuddin"
+  },
   "engines": {
     "vscode": "^1.87.0"
   },
