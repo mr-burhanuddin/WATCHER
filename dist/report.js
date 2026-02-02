@@ -35,17 +35,14 @@ function generateFullReport(ai) {
 
 ## 🤖 Confidence Assessment
 - Confidence Score: **${ai.confidence_score}/100**
-- Risk Level: **${hallucination.risk}**
+- Risk Level: **${hallucination.risk !== "LOW"
+        ? `⚠️ **Caution:** This review contains speculative language (${hallucination.triggers.join(", ")}). Manual verification recommended.`
+        : hallucination.risk}**
 - Notes: ${ai.confidence_notes.includes("Verification disagreement")
         ? "⚠️ **AI self-verification detected disagreement. Manual review recommended.**"
         : ai.confidence_notes.includes("Diff truncated")
             ? "⚠️ **Large PR detected:** Review is partial due to diff size limits."
             : ai.confidence_notes}
-
-
-${hallucination.risk !== "LOW"
-        ? `⚠️ **Caution:** This review contains speculative language (${hallucination.triggers.join(", ")}). Manual verification recommended.`
-        : ""}
 
 ## AI Attribution
 - AI Generated: **${ai.ai_generated_percent}%**
@@ -79,11 +76,13 @@ function generatePRSummaryBlock(ai) {
 ## 🤖 Watcher PR Review
 
 **Confidence:** ${ai.confidence_score}/100  
-**Risk Level:** ${hallucination.risk}
-
-${hallucination.risk !== "LOW"
+**Risk Level:** ${hallucination.risk !== "LOW"
         ? "⚠️ **Manual review strongly recommended.**"
         : "✅ **High confidence review.**"}
+
+## AI Attribution
+- AI Generated: **${ai.ai_generated_percent}%**
+- Human Written: **${100 - ai.ai_generated_percent}%**
 
 ### 🔍 Key Findings
 ${ai.issues.length > 0
