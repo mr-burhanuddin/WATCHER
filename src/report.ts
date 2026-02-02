@@ -45,7 +45,13 @@ export function generateFullReport(ai: WatcherAIResult): string {
 
 ## 🤖 Confidence Assessment
 - Confidence Score: **${ai.confidence_score}/100**
-- Risk Level: **${hallucination.risk}**
+- Risk Level: **${
+    hallucination.risk !== "LOW"
+      ? `⚠️ **Caution:** This review contains speculative language (${hallucination.triggers.join(
+          ", ",
+        )}). Manual verification recommended.`
+      : hallucination.risk
+  }**
 - Notes: ${
     ai.confidence_notes.includes("Verification disagreement")
       ? "⚠️ **AI self-verification detected disagreement. Manual review recommended.**"
@@ -53,15 +59,6 @@ export function generateFullReport(ai: WatcherAIResult): string {
         ? "⚠️ **Large PR detected:** Review is partial due to diff size limits."
         : ai.confidence_notes
   }
-
-
-${
-  hallucination.risk !== "LOW"
-    ? `⚠️ **Caution:** This review contains speculative language (${hallucination.triggers.join(
-        ", ",
-      )}). Manual verification recommended.`
-    : ""
-}
 
 ## AI Attribution
 - AI Generated: **${ai.ai_generated_percent}%**
@@ -105,13 +102,15 @@ export function generatePRSummaryBlock(ai: WatcherAIResult): string {
 ## 🤖 Watcher PR Review
 
 **Confidence:** ${ai.confidence_score}/100  
-**Risk Level:** ${hallucination.risk}
+**Risk Level:** ${
+    hallucination.risk !== "LOW"
+      ? "⚠️ **Manual review strongly recommended.**"
+      : "✅ **High confidence review.**"
+  }
 
-${
-  hallucination.risk !== "LOW"
-    ? "⚠️ **Manual review strongly recommended.**"
-    : "✅ **High confidence review.**"
-}
+## AI Attribution
+- AI Generated: **${ai.ai_generated_percent}%**
+- Human Written: **${100 - ai.ai_generated_percent}%**
 
 ### 🔍 Key Findings
 ${
