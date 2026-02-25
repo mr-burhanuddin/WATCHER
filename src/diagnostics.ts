@@ -1,61 +1,72 @@
 import * as vscode from "vscode";
 import { WatcherAIResult } from "./ai";
 
-let collection: vscode.DiagnosticCollection | null = null;
+let diagnosticCollection: vscode.DiagnosticCollection | undefined;
 
+/**
+ * Initialize diagnostics collection
+ */
 export function initDiagnostics(context: vscode.ExtensionContext) {
-  collection = vscode.languages.createDiagnosticCollection("watcher");
-  context.subscriptions.push(collection);
-}
-
-function riskToSeverity(
-  risk: "LOW" | "MEDIUM" | "HIGH",
-): vscode.DiagnosticSeverity {
-  switch (risk) {
-    case "HIGH":
-      return vscode.DiagnosticSeverity.Error;
-    case "MEDIUM":
-      return vscode.DiagnosticSeverity.Warning;
-    default:
-      return vscode.DiagnosticSeverity.Information;
+  if (!diagnosticCollection) {
+    diagnosticCollection =
+      vscode.languages.createDiagnosticCollection("watcher");
+    context.subscriptions.push(diagnosticCollection);
   }
 }
 
+/**
+ * Clear all Watcher diagnostics
+ */
+export function clearDiagnostics() {
+  diagnosticCollection?.clear();
+}
+
+/**
+ * Publish diagnostics based on AI review
+ * ONLY negatives and risks produce Problems
+ */
 export function publishDiagnostics(files: string[], ai: WatcherAIResult) {
-  if (!collection) return;
+  if (!diagnosticCollection) return;
 
-  let summaryText = "";
+  const diagnosticsByFile = new Map<string, vscode.Diagnostic[]>();
 
-  if (ai.confidence_notes.includes("Diff truncated")) {
-    summaryText =
-      "Large PR detected. Watcher review was partial due to size limits.";
-  }
-
-  summaryText =
-    ai.issues.length > 0 ? ai.issues.join("; ") : "No major issues detected";
-
-  const risk =
-    ai.confidence_score < 50
-      ? "HIGH"
-      : ai.confidence_score < 75
-        ? "MEDIUM"
-        : "LOW";
-
-  for (const file of files) {
+  // Helper to push diagnostics
+  function addDiagnostic(
+    file: string,
+    message: string,
+    severity: vscode.DiagnosticSeverity,
+  ) {
     const uri = vscode.Uri.file(file);
 
     const diagnostic = new vscode.Diagnostic(
-      new vscode.Range(0, 0, 0, 0),
-      `Watcher Review (${risk} confidence): ${summaryText}`,
-      riskToSeverity(risk),
+      new vscode.Range(0, 0, 0, 1),
+      message,
+      severity,
     );
 
-    diagnostic.source = "Watcher";
+    if (!diagnosticsByFile.has(uri.fsPath)) {
+      diagnosticsByFile.set(uri.fsPath, []);
+    }
 
-    collection.set(uri, [diagnostic]);
+    diagnosticsByFile.get(uri.fsPath)!.push(diagnostic);
   }
-}
 
-export function clearDiagnostics() {
-  collection?.clear();
+  // Negatives → Warnings
+  for (const issue of ai.negatives || []) {
+    for (const file of files) {
+      addDiagnostic(file, issue, vscode.DiagnosticSeverity.Warning);
+    }
+  }
+
+  // Risks → Errors
+  for (const risk of ai.risks || []) {
+    for (const file of files) {
+      addDiagnostic(file, risk, vscode.DiagnosticSeverity.Error);
+    }
+  }
+
+  // Publish
+  for (const [filePath, diags] of diagnosticsByFile.entries()) {
+    diagnosticCollection.set(vscode.Uri.file(filePath), diags);
+  }
 }

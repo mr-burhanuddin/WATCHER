@@ -36,36 +36,101 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.reviewWithEditorAI = reviewWithEditorAI;
 exports.verifyReviewWithAI = verifyReviewWithAI;
 const vscode = __importStar(require("vscode"));
-async function reviewWithEditorAI(input) {
-    const models = await vscode.lm.selectChatModels({});
-    if (!models.length) {
-        throw new Error("Watcher: No AI model available in this editor");
+const modelSelector_1 = require("./modelSelector");
+/**
+ * Helper to query the configured AI provider (VS Code LM or Ollama)
+ */
+async function queryAI(prompt, token) {
+    const config = vscode.workspace.getConfiguration("watcher");
+    const provider = config.get("aiProvider", "vscode");
+    if (provider === "ollama") {
+        const url = config.get("ollamaUrl", "http://localhost:11434");
+        const modelName = config.get("ollamaModel", "qwen2.5-coder:1.5b");
+        try {
+            // Allow user to use trailing slash or not
+            const endpoint = url.endsWith("/") ? `${url}api/chat` : `${url}/api/chat`;
+            const body = {
+                model: modelName,
+                messages: [{ role: "user", content: prompt }],
+                stream: false,
+                format: "json", // Force JSON mode for better parsing
+                options: {
+                    temperature: 0.2, // Low temperature for consistent code review
+                },
+            };
+            const res = await fetch(endpoint, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify(body),
+            });
+            if (!res.ok) {
+                throw new Error(`Ollama Error: ${res.status} ${res.statusText}`);
+            }
+            const data = (await res.json());
+            if (!data || !data.message || !data.message.content) {
+                throw new Error("Ollama returned invalid response structure");
+            }
+            return data.message.content;
+        }
+        catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            throw new Error(`Watcher (Ollama): ${msg}. Make sure Ollama is running and model '${modelName}' is pulled.`);
+        }
     }
-    const model = models[0];
+    else {
+        // Default: VS Code Language Model API
+        const model = await (0, modelSelector_1.selectCheapChatModel)();
+        const response = await model.sendRequest([vscode.LanguageModelChatMessage.User(prompt)], {}, token);
+        let text = "";
+        for await (const chunk of response.text) {
+            text += chunk;
+        }
+        return text;
+    }
+}
+/**
+ * Primary AI review using editor-provided AI model or Local AI
+ */
+async function reviewWithEditorAI(input) {
     const prompt = `
-You are a senior software engineer reviewing a pull request.
+You are assisting a HUMAN pull request reviewer.
 
-Tasks:
-1. Estimate percentage of AI-generated vs human-written code.
-2. Identify logic bugs, code smells, and architectural issues.
-3. Review test quality and missing test cases.
-4. Provide a concise PR summary.
-5. Assess your confidence in this review.
+Your role is to classify findings, not to judge outcomes.
 
-Rules:
-- Be strict and technical
-- Do NOT hallucinate
-- If something cannot be determined from the diff, say so
-- Output VALID JSON ONLY
-- No markdown, no prose outside JSON
+IMPORTANT CONTEXT RULES:
+- AI attribution MUST be based ONLY on the newly added code
+- Do NOT consider removed lines, unchanged context, or baseline code for attribution
+- Use the full diff ONLY to understand logic and intent
 
-Files:
+OUTPUT RULES (STRICT):
+- Bullet points only
+- Max 5 positives, 5 negatives, 3 risks
+- Each bullet must be <= 120 characters
+- No generic advice
+- No speculation
+- No repetition
+- VALID JSON ONLY
+- NO markdown, NO prose outside JSON
+
+CATEGORIES:
+- positives: what is clearly done well
+- negatives: concrete issues that should be addressed
+- risks: changes that may cause future or indirect issues
+- test_feedback: gaps or concerns related to tests
+- summary: concise description of what changed (2–3 lines)
+
+Files changed:
 ${input.files.join("\n")}
 
-Baseline Diff (existing code context):
+Baseline Diff (existing code context – DO NOT use for attribution):
 ${input.baselineDiff ?? "Not available"}
 
-Git Diff:
+Newly Added Code (ONLY source for AI attribution):
+${input.addedCode || "No newly added code"}
+
+Full Git Diff (context only):
 ${input.diff}
 
 Custom Review Checklist:
@@ -73,101 +138,102 @@ ${input.checklist
         ? input.checklist.map((c) => `- (${c.id}) ${c.description}`).join("\n")
         : "No custom checklist provided"}
 
-If a checklist is provided:
+Checklist rules (if provided):
 - Evaluate EACH checklist item
 - Mark as PASS, FAIL, or UNCERTAIN
-- Provide a short note for each
+- Provide a short, factual note
 
-
-Output format:
+OUTPUT FORMAT (JSON ONLY):
 {
-  "ai_generated_percent": number,
-  "issues": string[],
+  "ai_percent_new_code": number,
+  "human_percent_new_code": number,
+  "positives": string[],
+  "negatives": string[],
+  "risks": string[],
   "test_feedback": string[],
   "summary": string,
-  "confidence_score": number, // 0–100
+  "confidence_level": "LOW" | "MEDIUM" | "HIGH",
   "confidence_notes": string,
   "checklist_results": [
-  {
-    "id": string,
-    "status": "PASS" | "FAIL" | "UNCERTAIN",
-    "notes": string
-  }
-]
-
+    {
+      "id": string,
+      "status": "PASS" | "FAIL" | "UNCERTAIN",
+      "notes": string
+    }
+  ]
 }
 `;
-    const response = await model.sendRequest([vscode.LanguageModelChatMessage.User(prompt)], {}, new vscode.CancellationTokenSource().token);
-    let text = "";
-    for await (const chunk of response.text) {
-        text += chunk;
-    }
     try {
-        return JSON.parse(text);
+        const text = await queryAI(prompt, new vscode.CancellationTokenSource().token);
+        // Attempt parsing
+        try {
+            const parsed = JSON.parse(text);
+            // Safety: ensure human % is consistent
+            if (typeof parsed.ai_percent_new_code === "number" &&
+                typeof parsed.human_percent_new_code !== "number") {
+                parsed.human_percent_new_code = Math.max(0, 100 - parsed.ai_percent_new_code);
+            }
+            return parsed;
+        }
+        catch {
+            throw new Error("Watcher: AI response was not valid JSON.\n\nRaw response:\n" + text);
+        }
     }
-    catch {
-        throw new Error("Watcher: AI response was not valid JSON. Raw response:\n" + text);
+    catch (err) {
+        throw new Error(`Watcher Review Failed: ${err instanceof Error ? err.message : String(err)}`);
     }
 }
 /**
- * Runs a lightweight verification pass to detect AI disagreement
+ * Secondary lightweight verification pass
+ * Used ONLY to detect disagreement / hallucination risk
  */
 async function verifyReviewWithAI(input) {
-    const models = await vscode.lm.selectChatModels({});
-    if (!models.length) {
-        return {
-            disagreementScore: 0,
-            notes: "Verification skipped (no AI model available)",
-        };
-    }
-    const model = models[0];
     const prompt = `
 You are verifying an AI-generated PR review.
 
-Primary Review Summary:
+PRIMARY SUMMARY:
 ${input.primary.summary}
 
-Primary Issues:
-${input.primary.issues.join("\n")}
+PRIMARY NEGATIVES:
+${input.primary.negatives.join("\n") || "None"}
 
-Checklist Results:
-${input.primary.checklist_results
-        ? input.primary.checklist_results
-            .map((r) => `${r.id}: ${r.status}`)
-            .join("\n")
-        : "No checklist"}
+PRIMARY RISKS:
+${input.primary.risks.join("\n") || "None"}
 
-Task:
-- Review the staged diff independently
-- Determine whether you AGREE or DISAGREE with the primary review
-- Identify missing or overstated concerns
+TASK:
+- Independently review the staged diff
+- Identify ONLY disagreements or missing concerns
+- Do NOT repeat agreements
+- Be strict and concise
 
-Rules:
-- Be strict
-- Focus only on disagreements
-- Output VALID JSON only
+RULES:
+- No speculation
+- JSON ONLY
 
 Git Diff:
 ${input.diff}
 
-Output format:
+OUTPUT FORMAT:
 {
-  "disagreementScore": number, // 0–100 (0 = full agreement)
+  "disagreementScore": number,
   "notes": string
 }
 `;
-    const response = await model.sendRequest([vscode.LanguageModelChatMessage.User(prompt)], {}, new vscode.CancellationTokenSource().token);
-    let text = "";
-    for await (const chunk of response.text) {
-        text += chunk;
-    }
     try {
+        const text = await queryAI(prompt, new vscode.CancellationTokenSource().token);
         return JSON.parse(text);
     }
-    catch {
+    catch (err) {
+        if (err instanceof Error && err.message.includes("No AI model available")) {
+            return {
+                disagreementScore: 0,
+                notes: "Verification skipped (no AI model available)",
+            };
+        }
+        // For other errors (parsing or network), we default to a safe failure
         return {
             disagreementScore: 50,
-            notes: "Verification response was invalid",
+            notes: `Verification response invalid or failed: ${err instanceof Error ? err.message : String(err)}`,
         };
     }
 }

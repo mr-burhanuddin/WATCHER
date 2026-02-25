@@ -45,6 +45,8 @@ const report_1 = require("./report");
 const diagnostics_1 = require("./diagnostics");
 const checklist_1 = require("./checklist");
 const diffChunker_1 = require("./diffChunker");
+const diffUtils_1 = require("./diffUtils");
+const scoring_1 = require("./scoring");
 function loadRepoConfig(rootPath) {
     const configPath = path.join(rootPath, ".watcher", "config.json");
     if (!fs.existsSync(configPath))
@@ -62,10 +64,8 @@ function stageWatcherFiles(repoRoot) {
     });
 }
 function activate(context) {
-    (0, diagnostics_1.initDiagnostics)(context);
     const runCommand = vscode.commands.registerCommand("watcher.run", async () => {
         try {
-            (0, diagnostics_1.clearDiagnostics)();
             const workspace = vscode.workspace.workspaceFolders?.[0];
             if (!workspace) {
                 throw new Error("Watcher: No workspace open");
@@ -74,6 +74,13 @@ function activate(context) {
             const repoConfig = loadRepoConfig(rootPath);
             const vscodeConfig = vscode.workspace.getConfiguration("watcher");
             const autoStage = repoConfig.autoStage ?? vscodeConfig.get("autoStage", true);
+            const showProblems = repoConfig.showProblems ??
+                vscodeConfig.get("showProblems", true);
+            if (showProblems)
+                (0, diagnostics_1.initDiagnostics)(context);
+            else
+                (0, diagnostics_1.clearDiagnostics)();
+            (0, diagnostics_1.clearDiagnostics)();
             const baseBranch = repoConfig.baseBranch || vscodeConfig.get("baseBranch");
             if (!baseBranch) {
                 throw new Error("Watcher: baseBranch is not configured (repo or VS Code settings)");
@@ -84,30 +91,33 @@ function activate(context) {
                 return;
             }
             const diff = await (0, git_1.getStagedDiff)();
+            const addedCodeOnly = (0, diffUtils_1.extractAddedLines)(diff);
             const baselineDiff = await (0, git_1.getBaselineDiff)(baseBranch);
             const checklist = (0, checklist_1.loadChecklist)(rootPath);
             const { chunks, truncated } = (0, diffChunker_1.chunkDiff)(diff);
+            // --- Primary AI review ---
             let aiResult = await (0, ai_1.reviewWithEditorAI)({
                 diff: chunks[0],
+                addedCode: addedCodeOnly,
                 baselineDiff,
                 files,
                 checklist: checklist?.checks,
             });
+            // --- Merge chunked results ---
             for (let i = 1; i < chunks.length; i++) {
                 const partial = await (0, ai_1.reviewWithEditorAI)({
                     diff: chunks[i],
+                    addedCode: addedCodeOnly,
                     baselineDiff,
                     files,
                     checklist: checklist?.checks,
                 });
-                // Merge issues conservatively
-                aiResult.issues.push(...partial.issues);
+                aiResult.positives.push(...partial.positives);
+                aiResult.negatives.push(...partial.negatives);
+                aiResult.risks.push(...partial.risks);
                 aiResult.test_feedback.push(...partial.test_feedback);
             }
-            if (truncated) {
-                aiResult.confidence_score = Math.max(0, aiResult.confidence_score - 20);
-                aiResult.confidence_notes += " | Diff truncated due to size limits";
-            }
+            // --- Verification pass ---
             const verification = await (0, ai_1.verifyReviewWithAI)({
                 diff,
                 baselineDiff,
@@ -115,23 +125,34 @@ function activate(context) {
                 checklist: checklist?.checks,
                 primary: aiResult,
             });
-            // Adjust confidence based on disagreement
-            if (verification.disagreementScore > 0) {
-                aiResult.confidence_score = Math.max(0, aiResult.confidence_score -
-                    Math.floor(verification.disagreementScore / 2));
-                aiResult.confidence_notes += ` | Verification disagreement: ${verification.notes}`;
-            }
+            // --- Deterministic scoring (Step C2) ---
+            const confidenceScore = (0, scoring_1.computeConfidenceScore)(aiResult.confidence_level, truncated, verification.disagreementScore);
+            const prScore = (0, scoring_1.computePRScore)(aiResult);
+            const riskLevel = (0, scoring_1.computeRiskLevel)(confidenceScore, aiResult.risks.length);
+            // --- Persist results ---
             const watcherDir = path.join(rootPath, ".watcher");
             if (!fs.existsSync(watcherDir)) {
                 fs.mkdirSync(watcherDir);
             }
-            fs.writeFileSync(path.join(watcherDir, "WATCHER_REVIEW.md"), (0, report_1.generateFullReport)(aiResult), "utf8");
-            fs.writeFileSync(path.join(watcherDir, "PR_SUMMARY.md"), (0, report_1.generatePRSummaryBlock)(aiResult), "utf8");
-            (0, diagnostics_1.publishDiagnostics)(files, aiResult);
+            fs.writeFileSync(path.join(watcherDir, "WATCHER_REVIEW.md"), (0, report_1.generateFullReport)({
+                ai: aiResult,
+                confidenceScore,
+                riskLevel,
+                prScore,
+            }), "utf8");
+            fs.writeFileSync(path.join(watcherDir, "PR_SUMMARY.md"), (0, report_1.generatePRSummaryBlock)({
+                ai: aiResult,
+                confidenceScore,
+                riskLevel,
+                prScore,
+            }), "utf8");
+            if (showProblems) {
+                (0, diagnostics_1.publishDiagnostics)(files, aiResult);
+            }
             if (autoStage) {
                 await stageWatcherFiles(rootPath);
             }
-            vscode.window.showInformationMessage("Watcher: Review completed with inline diagnostics");
+            vscode.window.showInformationMessage("Watcher: Review completed successfully");
         }
         catch (err) {
             vscode.window.showErrorMessage(`Watcher error: ${String(err)}`);

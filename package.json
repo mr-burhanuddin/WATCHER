@@ -14,7 +14,7 @@
   },
   "license": "MIT",
   "engines": {
-    "vscode": "^1.108.1"
+    "vscode": "^1.100.0"
   },
   "categories": [
     "AI",
@@ -56,6 +56,30 @@
           "type": "string",
           "default": "origin/dev",
           "description": "Base branch to compare against for PR review (e.g. origin/main, origin/develop). If empty, repo config must provide it."
+        },
+        "watcher.showProblems": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show AI findings in VS Code Problems panel"
+        },
+        "watcher.aiProvider": {
+          "type": "string",
+          "enum": [
+            "vscode",
+            "ollama"
+          ],
+          "default": "vscode",
+          "description": "AI Provider to use for reviews. 'vscode' uses the editor's Copilot/Language Models. 'ollama' uses a local Ollama instance."
+        },
+        "watcher.ollamaUrl": {
+          "type": "string",
+          "default": "http://localhost:11434",
+          "description": "URL of the local Ollama instance (only used if aiProvider is 'ollama')"
+        },
+        "watcher.ollamaModel": {
+          "type": "string",
+          "default": "yi-coder:1.5b",
+          "description": "Model name to use with Ollama (only used if aiProvider is 'ollama'). Ensure you have pulled this model (`ollama pull <model>`)."
         }
       }
     }
@@ -69,7 +93,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.19.30",
-    "@types/vscode": "^1.108.1",
+    "@types/vscode": "^1.100.0",
     "typescript": "^5.4.0"
   },
   "dependencies": {

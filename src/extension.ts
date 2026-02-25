@@ -14,10 +14,17 @@ import {
 
 import { loadChecklist } from "./checklist";
 import { chunkDiff } from "./diffChunker";
+import { extractAddedLines } from "./diffUtils";
+import {
+  computePRScore,
+  computeConfidenceScore,
+  computeRiskLevel,
+} from "./scoring";
 
 type WatcherRepoConfig = {
   autoStage?: boolean;
   baseBranch?: string;
+  showProblems?: boolean;
 };
 
 function loadRepoConfig(rootPath: string): WatcherRepoConfig {
@@ -40,26 +47,30 @@ function stageWatcherFiles(repoRoot: string) {
 }
 
 export function activate(context: vscode.ExtensionContext) {
-  initDiagnostics(context);
-
   const runCommand = vscode.commands.registerCommand(
     "watcher.run",
     async () => {
       try {
-        clearDiagnostics();
-
         const workspace = vscode.workspace.workspaceFolders?.[0];
         if (!workspace) {
           throw new Error("Watcher: No workspace open");
         }
 
         const rootPath = workspace.uri.fsPath;
-
         const repoConfig = loadRepoConfig(rootPath);
         const vscodeConfig = vscode.workspace.getConfiguration("watcher");
 
         const autoStage =
           repoConfig.autoStage ?? vscodeConfig.get<boolean>("autoStage", true);
+
+        const showProblems =
+          repoConfig.showProblems ??
+          vscodeConfig.get<boolean>("showProblems", true);
+
+        if (showProblems) initDiagnostics(context);
+        else clearDiagnostics();
+
+        clearDiagnostics();
 
         const baseBranch =
           repoConfig.baseBranch || vscodeConfig.get<string>("baseBranch");
@@ -77,41 +88,38 @@ export function activate(context: vscode.ExtensionContext) {
         }
 
         const diff = await getStagedDiff();
+        const addedCodeOnly = extractAddedLines(diff);
         const baselineDiff = await getBaselineDiff(baseBranch);
 
         const checklist = loadChecklist(rootPath);
-
         const { chunks, truncated } = chunkDiff(diff);
 
+        // --- Primary AI review ---
         let aiResult = await reviewWithEditorAI({
           diff: chunks[0],
+          addedCode: addedCodeOnly,
           baselineDiff,
           files,
           checklist: checklist?.checks,
         });
 
+        // --- Merge chunked results ---
         for (let i = 1; i < chunks.length; i++) {
           const partial = await reviewWithEditorAI({
             diff: chunks[i],
+            addedCode: addedCodeOnly,
             baselineDiff,
             files,
             checklist: checklist?.checks,
           });
 
-          // Merge issues conservatively
-          aiResult.issues.push(...partial.issues);
+          aiResult.positives.push(...partial.positives);
+          aiResult.negatives.push(...partial.negatives);
+          aiResult.risks.push(...partial.risks);
           aiResult.test_feedback.push(...partial.test_feedback);
         }
 
-        if (truncated) {
-          aiResult.confidence_score = Math.max(
-            0,
-            aiResult.confidence_score - 20,
-          );
-
-          aiResult.confidence_notes += " | Diff truncated due to size limits";
-        }
-
+        // --- Verification pass ---
         const verification = await verifyReviewWithAI({
           diff,
           baselineDiff,
@@ -120,17 +128,20 @@ export function activate(context: vscode.ExtensionContext) {
           primary: aiResult,
         });
 
-        // Adjust confidence based on disagreement
-        if (verification.disagreementScore > 0) {
-          aiResult.confidence_score = Math.max(
-            0,
-            aiResult.confidence_score -
-              Math.floor(verification.disagreementScore / 2),
-          );
+        // --- Deterministic scoring (Step C2) ---
+        const confidenceScore = computeConfidenceScore(
+          aiResult.confidence_level,
+          truncated,
+          verification.disagreementScore,
+        );
 
-          aiResult.confidence_notes += ` | Verification disagreement: ${verification.notes}`;
-        }
+        const prScore = computePRScore(aiResult);
+        const riskLevel = computeRiskLevel(
+          confidenceScore,
+          aiResult.risks.length,
+        );
 
+        // --- Persist results ---
         const watcherDir = path.join(rootPath, ".watcher");
         if (!fs.existsSync(watcherDir)) {
           fs.mkdirSync(watcherDir);
@@ -138,24 +149,36 @@ export function activate(context: vscode.ExtensionContext) {
 
         fs.writeFileSync(
           path.join(watcherDir, "WATCHER_REVIEW.md"),
-          generateFullReport(aiResult),
+          generateFullReport({
+            ai: aiResult,
+            confidenceScore,
+            riskLevel,
+            prScore,
+          }),
           "utf8",
         );
 
         fs.writeFileSync(
           path.join(watcherDir, "PR_SUMMARY.md"),
-          generatePRSummaryBlock(aiResult),
+          generatePRSummaryBlock({
+            ai: aiResult,
+            confidenceScore,
+            riskLevel,
+            prScore,
+          }),
           "utf8",
         );
 
-        publishDiagnostics(files, aiResult);
+        if (showProblems) {
+          publishDiagnostics(files, aiResult);
+        }
 
         if (autoStage) {
           await stageWatcherFiles(rootPath);
         }
 
         vscode.window.showInformationMessage(
-          "Watcher: Review completed with inline diagnostics",
+          "Watcher: Review completed successfully",
         );
       } catch (err) {
         vscode.window.showErrorMessage(`Watcher error: ${String(err)}`);

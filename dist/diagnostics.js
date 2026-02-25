@@ -34,47 +34,58 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.initDiagnostics = initDiagnostics;
-exports.publishDiagnostics = publishDiagnostics;
 exports.clearDiagnostics = clearDiagnostics;
+exports.publishDiagnostics = publishDiagnostics;
 const vscode = __importStar(require("vscode"));
-let collection = null;
+let diagnosticCollection;
+/**
+ * Initialize diagnostics collection
+ */
 function initDiagnostics(context) {
-    collection = vscode.languages.createDiagnosticCollection("watcher");
-    context.subscriptions.push(collection);
-}
-function riskToSeverity(risk) {
-    switch (risk) {
-        case "HIGH":
-            return vscode.DiagnosticSeverity.Error;
-        case "MEDIUM":
-            return vscode.DiagnosticSeverity.Warning;
-        default:
-            return vscode.DiagnosticSeverity.Information;
+    if (!diagnosticCollection) {
+        diagnosticCollection =
+            vscode.languages.createDiagnosticCollection("watcher");
+        context.subscriptions.push(diagnosticCollection);
     }
 }
-function publishDiagnostics(files, ai) {
-    if (!collection)
-        return;
-    let summaryText = "";
-    if (ai.confidence_notes.includes("Diff truncated")) {
-        summaryText =
-            "Large PR detected. Watcher review was partial due to size limits.";
-    }
-    summaryText =
-        ai.issues.length > 0 ? ai.issues.join("; ") : "No major issues detected";
-    const risk = ai.confidence_score < 50
-        ? "HIGH"
-        : ai.confidence_score < 75
-            ? "MEDIUM"
-            : "LOW";
-    for (const file of files) {
-        const uri = vscode.Uri.file(file);
-        const diagnostic = new vscode.Diagnostic(new vscode.Range(0, 0, 0, 0), `Watcher Review (${risk} confidence): ${summaryText}`, riskToSeverity(risk));
-        diagnostic.source = "Watcher";
-        collection.set(uri, [diagnostic]);
-    }
-}
+/**
+ * Clear all Watcher diagnostics
+ */
 function clearDiagnostics() {
-    collection?.clear();
+    diagnosticCollection?.clear();
+}
+/**
+ * Publish diagnostics based on AI review
+ * ONLY negatives and risks produce Problems
+ */
+function publishDiagnostics(files, ai) {
+    if (!diagnosticCollection)
+        return;
+    const diagnosticsByFile = new Map();
+    // Helper to push diagnostics
+    function addDiagnostic(file, message, severity) {
+        const uri = vscode.Uri.file(file);
+        const diagnostic = new vscode.Diagnostic(new vscode.Range(0, 0, 0, 1), message, severity);
+        if (!diagnosticsByFile.has(uri.fsPath)) {
+            diagnosticsByFile.set(uri.fsPath, []);
+        }
+        diagnosticsByFile.get(uri.fsPath).push(diagnostic);
+    }
+    // Negatives → Warnings
+    for (const issue of ai.negatives || []) {
+        for (const file of files) {
+            addDiagnostic(file, issue, vscode.DiagnosticSeverity.Warning);
+        }
+    }
+    // Risks → Errors
+    for (const risk of ai.risks || []) {
+        for (const file of files) {
+            addDiagnostic(file, risk, vscode.DiagnosticSeverity.Error);
+        }
+    }
+    // Publish
+    for (const [filePath, diags] of diagnosticsByFile.entries()) {
+        diagnosticCollection.set(vscode.Uri.file(filePath), diags);
+    }
 }
 //# sourceMappingURL=diagnostics.js.map
