@@ -2,7 +2,7 @@
   "name": "watcher",
   "displayName": "Watcher",
   "description": "AI-powered PR review agent using editor-provided models",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "mr-burhanuddin",
   "author": {
     "name": "Burhanuddin"
