@@ -2,14 +2,14 @@
 
 **Editor-native AI Pull Request Reviewer**
 
-Watcher is a **VS Code–compatible extension** that performs **AI-assisted Pull Request reviews directly inside your editor** using the **editor’s built-in AI models** (Copilot / Cursor / Windsurf / compatible editors).
+Watcher is a **VS Code–compatible extension** that performs **AI-assisted Pull Request reviews directly inside your editor**. It utilizes either the **editor’s built-in AI models** (Copilot / Cursor / Windsurf / compatible editors) or a **local Ollama instance**.
 
 It reviews **staged Git changes**, highlights issues inline, generates **PR-ready summaries**, and helps human reviewers focus on what actually matters.
 
 > ✅ No OpenAI keys  
-> ✅ No external APIs  
-> ✅ No CI or CLI dependency  
-> ✅ Works entirely inside the editor
+> ✅ No external API dependencies (uses local or editor AI)  
+> ✅ No CI dependencies (requires only standard `git` CLI)  
+> ✅ Works entirely inside your environment
 
 ---
 
@@ -21,7 +21,7 @@ Watcher analyzes your **staged code** and provides:
 - 🔍 **Code quality & logic review**
 - 🧪 **Test coverage feedback**
 - 🆕 **Regression detection (baseline comparison)**
-- ✅ **Custom checklist enforcement**
+- ✅ **Custom checklist support**
 - 🧠 **AI confidence scoring & hallucination detection**
 - ⚠️ **Inline editor diagnostics (Problems panel)**
 - 📝 **PR-ready Markdown summaries**
@@ -36,7 +36,7 @@ All without leaving your editor.
 1. Reads **staged Git changes**
 2. Optionally compares against a **user-defined base branch**
 3. Applies **custom checklist rules** (if provided)
-4. Uses **editor-provided AI models** to review the changes
+4. Uses **editor-provided AI models** or a **local Ollama instance** to review the changes
 5. Runs a **self-verification pass** to detect AI disagreement
 6. Generates:
    - Detailed review report
@@ -104,10 +104,9 @@ It also:
 
 Detailed technical analysis including:
 
-- AI confidence
-- Risk level
-- New vs existing issues
-- Checklist results
+- AI Confidence & Risk level
+- AI vs Human tracking (New Code)
+- AI Positives, Negatives & Risks
 - Test feedback
 
 ### `.watcher/PR_SUMMARY.md`
@@ -142,6 +141,10 @@ Settings → Extensions → Watcher
 | -------------------- | ------------------------------------- | -------------- |
 | `watcher.autoStage`  | Auto-stage Watcher files after review | `true`         |
 | `watcher.baseBranch` | Base branch for regression comparison | `"origin/dev"` |
+| `watcher.showProblems` | Show AI findings in VS Code Problems | `false` |
+| `watcher.aiProvider` | AI Provider to use (`vscode` or `ollama`) | `"vscode"` |
+| `watcher.ollamaUrl` | URL of local Ollama instance | `"http://localhost:11434"` |
+| `watcher.ollamaModel` | Model name to use with Ollama | `"yi-coder:1.5b"` |
 
 ---
 
@@ -202,9 +205,9 @@ checks:
 
 Watcher will:
 
-- Evaluate each checklist item
-- Mark it as **PASS / FAIL / UNCERTAIN**
-- Include results in reports and diagnostics
+- Evaluate each checklist item during its review
+- Mark it as **PASS / FAIL / UNCERTAIN** internally and use this context to guide its `negatives` and `risks` output
+> Note: Explicit Checklist result printing in reports and diagnostics is currently not implemented, though AI evaluates them internally.
 
 ---
 
@@ -212,10 +215,9 @@ Watcher will:
 
 Watcher assigns a **confidence score (0–100)** to every review based on:
 
-- AI self-assessment
-- Language uncertainty detection
+- AI self-assessment (LOW, MEDIUM, HIGH)
 - AI self-verification (disagreement detection)
-- Diff size & truncation
+- Diff size & truncation limits
 
 Low confidence reviews are **explicitly flagged** so humans know when to be cautious.
 
@@ -227,7 +229,7 @@ Watcher integrates with VS Code diagnostics:
 
 - Errors / warnings appear inline
 - Issues show up in the **Problems** panel
-- Severity is based on confidence & risk
+- Severity is based on issue category: Negatives become Warnings, Risks become Errors.
 
 This makes Watcher feel like a native linting tool.
 
@@ -244,9 +246,8 @@ Watcher is safe for large PRs:
 
 When a PR is too large:
 
-- Review is partial
-- Confidence is reduced
-- Clear warnings are shown
+- Review is partial (truncated beyond max chunk limit)
+- Confidence score is automatically penalized
 
 ---
 
@@ -254,13 +255,13 @@ When a PR is too large:
 
 Watcher is intentionally **editor-only**.
 
-❌ No CLI (`npm run watcher` will not work)
+❌ No Watcher-specific CLI (`npm run watcher` will not work)
 ❌ No CI execution
 ❌ No GitHub API calls
 ❌ No auto-posting PR comments
 ❌ No commit message rewriting
 
-This is required to safely use **editor-provided AI models**.
+This is required to safely use **editor-provided AI models** or **local Ollama instances**.
 
 ---
 
@@ -268,7 +269,7 @@ This is required to safely use **editor-provided AI models**.
 
 Watcher works in any editor that supports VS Code extensions and the Language Model API, including:
 
-- VS Code
+- VS Code (Note: Watcher automatically selects the model with the smallest context window to minimize resource usage)
 - Cursor
 - Windsurf
 - Antigravity
